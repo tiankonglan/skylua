@@ -2,8 +2,9 @@
 #define SOCKET_SERVER_H
 
 struct socket_server; 
+struct socket;
 
 void sock_init();
-void sock_poll_wait();
+int sock_poll_wait();
 
 #endif

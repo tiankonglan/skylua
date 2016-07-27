@@ -11,8 +11,8 @@ all: luaclib/core.so main
 luaclib/core.so:luaclib/lua_core.c
 	$(CC) $(CFLAGS) $(SHARED)  $^  -o $@ -I./sky
 
-main: sky/sky_main.c  sky/socket_server.c
-	$(CC) $(CFLAGS) -o $@ $^  -I./sky  $(LDFLAGS) $(EXPORT)  $(LIBS)  $(EXPAND_LIBS)
+main: sky/sky_main.c  sky/sky_mq.c sky/socket_server.c  
+	$(CC) $(CFLAGS) -o $@ $^   $(LIBS)   -I./sky  $(EXPORT)  $(EXPAND_LIBS)
 
 clean:
 	rm -rf luaclib/core.so

@@ -2,27 +2,29 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/epoll.h>
+#include <unistd.h>
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 
 #include "sky.h"
 #include "socket_server.h"
-
+#include "sky_mq.h"
 
 #define MIN_MALLOC_SIZE 128
 
 struct socket_server{
     int ep_fd;
     int listen_fd;
-    struct socket sock_set[1000];
+    struct socket* sock_set[1000];   //hash结构保存clientfd映射
 };
 
 struct socket{
     int fd;
     char* buffer;
-    int len
+    int len;
 };
 
 static struct  socket_server* ss = NULL;
@@ -62,13 +64,20 @@ void sock_init()
     ev.events = EPOLLIN;
 
     epoll_ctl(ss->ep_fd, EPOLL_CTL_ADD, ss->listen_fd, &ev);
+    if ( bind(ss->listen_fd, (struct sockaddr*)&serveraddr, sizeof(struct sockaddr)) != 0)
+    {
+        printf("socket bind error %d \n", errno);
+        exit(1);
+    }
 
-    bind(ss->listen_fd, (struct sockaddr*)&serveraddr, sizeof(struct sockaddr));
     listen(ss->listen_fd, 50);
     set_nonblock(ss->listen_fd);
+
+    int flag = 1; 
+    setsockopt (ss->listen_fd, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag));
 }
 
-void sock_poll_wait()
+int sock_poll_wait()
 {
     int ret = 0;
     struct epoll_event events[20];
@@ -83,7 +92,7 @@ void sock_poll_wait()
             int client_fd = accept(ss->listen_fd, (struct sockaddr*)&clientaddr, &clientlen);
             //Todo: 加入异常处理
 
-             struct socket* s = Malloc(sizeof(struct socket));
+             struct socket* s = malloc(sizeof(struct socket));
              s->fd = client_fd;
             ss->sock_set[client_fd] = s;
 
@@ -103,11 +112,27 @@ void sock_poll_wait()
             recv_num = recv(client_fd, buffer, MIN_MALLOC_SIZE , 0);
             printf("echo buffer:  %s \n", buffer);
 
+            if (recv_num == 0) 
+            {
+                printf("client socket close %d  \n", client_fd);
+                close(client_fd);
+                continue;
+            }
+
             //hash结构中去查找fd对应的socket结构
-            s = ss->sock_set[client_fd];
+            struct socket* s = ss->sock_set[client_fd];
             s->fd = client_fd;
             s->buffer = buffer;
-            s->len = len;
+            s->len = recv_num;
+
+            struct message* msg = malloc(sizeof(struct message));
+            msg->buffer = s->buffer;    //这里应该是由包处理程序malloc的一个报的大小
+            msg->len = s->len;
+            msg->next = NULL;
+            msg->fd = client_fd;
+
+            //只有在有消息输入的时候， 才触发逻辑线程
+            message_queue_push(msg);
 
             ret = 1;
         }
@@ -115,15 +140,7 @@ void sock_poll_wait()
         {
             //Todo: 处理写事件
         }
-
-        return ret;
     }
+    return ret;
 }
 
-void sock_recv()
-{
-}
-
-void sock_send()
-{
-}

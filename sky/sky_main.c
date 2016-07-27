@@ -5,12 +5,14 @@
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
+#include <sys/socket.h>
 
 #include <assert.h>
 #include <stdlib.h>
 
 #include "sky.h"
 #include "socket_server.h"
+#include "sky_mq.h"
 
 static const char *load_config = "\
     local f= io.open(\'luaframe/base.lua\')  \
@@ -19,6 +21,9 @@ static const char *load_config = "\
     local func = assert(load(chunk, \'=(load)\', \'t\'))()  \
     return  \
 ";
+
+struct lua_State *L; 
+struct context* ctx;
 
 struct context 
 {
@@ -39,7 +44,7 @@ create_thread(pthread_t *thread, void *(*start_routine) (void *), void *arg)
   }
 }
 
-static void* thread_socket(void *p) 
+static void* socket_thread(void *p) 
 {   
     sock_init();
     for(;;)
@@ -54,33 +59,40 @@ static void* thread_socket(void *p)
       
       // notify to worker thread 
       pthread_mutex_lock(&mutex);
-      pthread_cond_singal(&cond); 
+      pthread_cond_signal(&cont); 
       pthread_mutex_unlock(&mutex); 
     }
     return NULL;
 }
 
-static void* thread_worker(void *p)
+static void* worker_thread(void *p)
 {
     while(1)
     {       
             pthread_mutex_lock(&mutex);
-            pthread_cont_wait(&cont);         
+            pthread_cond_wait(&cont, &mutex);         
             pthread_mutex_unlock(&mutex);
-            if (cont.cb == NULL) 
+            if (ctx->cb == NULL) 
             {
                 continue;
             }
-            cont.cb(&cont, L, 3);
+
+            struct message* msg = message_queue_pop();
+            if (msg != NULL)
+            {
+                 ctx->cb(ctx, L, 3);
+                 send(msg->fd, msg->buffer, msg->len, 0);
+            }
     }
+    return NULL;
 }
 
 int main() {
-      struct context cont;
-      struct lua_State *L = luaL_newstate();
+      L = luaL_newstate();
+      ctx = malloc(sizeof(struct context));
 
       luaL_openlibs(L);
-      lua_pushlightuserdata(L, &cont);
+      lua_pushlightuserdata(L, ctx);
       lua_setfield(L, LUA_REGISTRYINDEX, "context");
 
       int err = luaL_loadstring(L, load_config);
@@ -96,9 +108,19 @@ int main() {
             return 1;
       }
 
+      pthread_mutex_init(&mutex, NULL);
+      pthread_cond_init(&cont, NULL);
+
+      message_queue_init();
+
       pthread_t  sock_thread_t;
-      create_thread(&sock_thread_t, thread_socket, NULL);
-      
+      create_thread(&sock_thread_t, socket_thread, NULL);
+    
+      pthread_t worker_thread_t;
+      create_thread(&worker_thread_t, worker_thread, NULL);
+
+      pthread_join(sock_thread_t, NULL);
+      pthread_join(worker_thread_t, NULL);
 
       return 0;
 }
